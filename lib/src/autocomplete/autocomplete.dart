@@ -109,6 +109,7 @@ class Autocomplete {
     if (response != null) {
       return AutocompleteResponse.parseAutocompleteResult(response);
     }
+    print(response);
     return null;
   }
 
@@ -202,9 +203,7 @@ class Autocomplete {
 
     var uri = Uri.https(
       proxyUrl != null && proxyUrl != '' ? proxyUrl! : _authority,
-      proxyUrl != null && proxyUrl != ''
-          ? 'https://$_authority/$_unencodedPath'
-          : _unencodedPath,
+      proxyUrl != null && proxyUrl != '' ? 'https://$_authority/$_unencodedPath' : _unencodedPath,
       queryParameters,
     );
     return await NetworkUtility.fetchUrl(uri, headers: headers);

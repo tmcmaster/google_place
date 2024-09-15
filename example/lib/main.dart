@@ -1,12 +1,14 @@
+import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:easy_debounce/easy_debounce.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_place/google_place.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await DotEnv().load('.env');
+  await DotEnv().load(fileName: '.env');
   runApp(MyApp());
 }
 
@@ -29,13 +31,27 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
-  GooglePlace googlePlace;
+  late final Future<GooglePlace> _googlePlace;
   List<AutocompletePrediction> predictions = [];
 
   @override
   void initState() {
-    String apiKey = DotEnv().env['API_KEY'];
-    googlePlace = GooglePlace(apiKey);
+    final completer = Completer<GooglePlace>();
+    _googlePlace = completer.future;
+    final dotEnv = DotEnv();
+    try {
+      dotEnv.load(fileName: '.env').then((_) {
+        final apiKey = dotEnv.env['API_KEY'];
+        if (apiKey == null) {
+          completer.completeError('API_KEY has not been set.');
+        } else {
+          debugPrint('===> Creating GoogleGeocoding: $apiKey');
+          completer.complete(GooglePlace(apiKey));
+        }
+      });
+    } catch (error) {
+      completer.completeError(error);
+    }
     super.initState();
   }
 
@@ -65,8 +81,13 @@ class _HomePageState extends State<HomePage> {
                   ),
                 ),
                 onChanged: (value) {
+                  print('onChanged : $value');
                   if (value.isNotEmpty) {
-                    autoCompleteSearch(value);
+                    EasyDebounce.debounce(
+                      'address-lookup',
+                      Duration(milliseconds: 1000),
+                      () => autoCompleteSearch(value),
+                    );
                   } else {
                     if (predictions.length > 0 && mounted) {
                       setState(() {
@@ -90,18 +111,21 @@ class _HomePageState extends State<HomePage> {
                           color: Colors.white,
                         ),
                       ),
-                      title: Text(predictions[index].description),
-                      onTap: () {
+                      title: Text(predictions[index].description ?? ''),
+                      onTap: () async {
+                        final googlePlace = await _googlePlace;
                         debugPrint(predictions[index].placeId);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) => DetailsPage(
-                              placeId: predictions[index].placeId,
-                              googlePlace: googlePlace,
+                        if (predictions[index].placeId != null) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => DetailsPage(
+                                placeId: predictions[index].placeId!,
+                                googlePlace: googlePlace,
+                              ),
                             ),
-                          ),
-                        );
+                          );
+                        }
                       },
                     );
                   },
@@ -119,10 +143,11 @@ class _HomePageState extends State<HomePage> {
   }
 
   void autoCompleteSearch(String value) async {
-    var result = await googlePlace.autocomplete.get(value);
+    print('autoCompleteSearch : $value');
+    var result = await (await _googlePlace).autocomplete.get(value);
     if (result != null && result.predictions != null && mounted) {
       setState(() {
-        predictions = result.predictions;
+        predictions = result.predictions!;
       });
     }
   }
@@ -132,25 +157,23 @@ class DetailsPage extends StatefulWidget {
   final String placeId;
   final GooglePlace googlePlace;
 
-  DetailsPage({Key key, this.placeId, this.googlePlace}) : super(key: key);
+  DetailsPage({
+    super.key,
+    required this.placeId,
+    required this.googlePlace,
+  });
 
   @override
-  _DetailsPageState createState() =>
-      _DetailsPageState(this.placeId, this.googlePlace);
+  _DetailsPageState createState() => _DetailsPageState();
 }
 
 class _DetailsPageState extends State<DetailsPage> {
-  final String placeId;
-  final GooglePlace googlePlace;
-
-  _DetailsPageState(this.placeId, this.googlePlace);
-
-  DetailsResult detailsResult;
+  DetailsResult? detailsResult;
   List<Uint8List> images = [];
 
   @override
   void initState() {
-    getDetils(this.placeId);
+    getDetils(widget.placeId);
     super.initState();
   }
 
@@ -164,7 +187,7 @@ class _DetailsPageState extends State<DetailsPage> {
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.blueAccent,
         onPressed: () {
-          getDetils(this.placeId);
+          getDetils(widget.placeId);
         },
         child: Icon(Icons.refresh),
       ),
@@ -220,19 +243,19 @@ class _DetailsPageState extends State<DetailsPage> {
                           ),
                         ),
                       ),
-                      detailsResult != null && detailsResult.types != null
+                      detailsResult != null && detailsResult!.types != null
                           ? Container(
                               margin: EdgeInsets.only(left: 15, top: 10),
                               height: 50,
                               child: ListView.builder(
                                 scrollDirection: Axis.horizontal,
-                                itemCount: detailsResult.types.length,
+                                itemCount: detailsResult!.types!.length,
                                 itemBuilder: (context, index) {
                                   return Container(
                                     margin: EdgeInsets.only(right: 10),
                                     child: Chip(
                                       label: Text(
-                                        detailsResult.types[index],
+                                        detailsResult!.types![index],
                                         style: TextStyle(
                                           color: Colors.white,
                                         ),
@@ -251,9 +274,8 @@ class _DetailsPageState extends State<DetailsPage> {
                             child: Icon(Icons.location_on),
                           ),
                           title: Text(
-                            detailsResult != null &&
-                                    detailsResult.formattedAddress != null
-                                ? 'Address: ${detailsResult.formattedAddress}'
+                            detailsResult != null && detailsResult!.formattedAddress != null
+                                ? 'Address: ${detailsResult!.formattedAddress}'
                                 : "Address: null",
                           ),
                         ),
@@ -266,9 +288,9 @@ class _DetailsPageState extends State<DetailsPage> {
                           ),
                           title: Text(
                             detailsResult != null &&
-                                    detailsResult.geometry != null &&
-                                    detailsResult.geometry.location != null
-                                ? 'Geometry: ${detailsResult.geometry.location.lat.toString()},${detailsResult.geometry.location.lng.toString()}'
+                                    detailsResult!.geometry != null &&
+                                    detailsResult!.geometry!.location != null
+                                ? 'Geometry: ${detailsResult!.geometry!.location!.lat.toString()},${detailsResult!.geometry!.location!.lng.toString()}'
                                 : "Geometry: null",
                           ),
                         ),
@@ -280,9 +302,8 @@ class _DetailsPageState extends State<DetailsPage> {
                             child: Icon(Icons.timelapse),
                           ),
                           title: Text(
-                            detailsResult != null &&
-                                    detailsResult.utcOffset != null
-                                ? 'UTC offset: ${detailsResult.utcOffset.toString()} min'
+                            detailsResult != null && detailsResult!.utcOffset != null
+                                ? 'UTC offset: ${detailsResult!.utcOffset.toString()} min'
                                 : "UTC offset: null",
                           ),
                         ),
@@ -294,9 +315,8 @@ class _DetailsPageState extends State<DetailsPage> {
                             child: Icon(Icons.rate_review),
                           ),
                           title: Text(
-                            detailsResult != null &&
-                                    detailsResult.rating != null
-                                ? 'Rating: ${detailsResult.rating.toString()}'
+                            detailsResult != null && detailsResult!.rating != null
+                                ? 'Rating: ${detailsResult!.rating.toString()}'
                                 : "Rating: null",
                           ),
                         ),
@@ -308,9 +328,8 @@ class _DetailsPageState extends State<DetailsPage> {
                             child: Icon(Icons.attach_money),
                           ),
                           title: Text(
-                            detailsResult != null &&
-                                    detailsResult.priceLevel != null
-                                ? 'Price level: ${detailsResult.priceLevel.toString()}'
+                            detailsResult != null && detailsResult!.priceLevel != null
+                                ? 'Price level: ${detailsResult!.priceLevel.toString()}'
                                 : "Price level: null",
                           ),
                         ),
@@ -331,23 +350,25 @@ class _DetailsPageState extends State<DetailsPage> {
   }
 
   void getDetils(String placeId) async {
-    var result = await this.googlePlace.details.get(placeId);
+    var result = await widget.googlePlace.details.get(placeId);
     if (result != null && result.result != null && mounted) {
       setState(() {
         detailsResult = result.result;
         images = [];
       });
 
-      if (result.result.photos != null) {
-        for (var photo in result.result.photos) {
-          getPhoto(photo.photoReference);
+      if (result.result!.photos != null) {
+        for (var photo in result.result!.photos!) {
+          if (photo.photoReference != null) {
+            getPhoto(photo.photoReference!);
+          }
         }
       }
     }
   }
 
   void getPhoto(String photoReference) async {
-    var result = await this.googlePlace.photos.get(photoReference, null, 400);
+    var result = await widget.googlePlace.photos.get(photoReference, 400, 400);
     if (result != null && mounted) {
       setState(() {
         images.add(result);
